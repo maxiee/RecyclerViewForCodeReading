@@ -66,6 +66,12 @@ public class RecyclerView extends ViewGroup {
     private float mScaledHorizontalScrollFactor = Float.MIN_VALUE;
     private float mScaledVerticalScrollFactor = Float.MIN_VALUE;
 
+    final State mState = new State();
+
+    // For use in item animations
+    boolean mItemsAddedOrRemoved = false;
+    boolean mItemsChanged = false;
+
     private ItemAnimator.ItemAnimatorListener mItemAnimatorListener = new ItemAnimatorRestoreListener();
 
     public RecyclerView(Context context) {
