@@ -14,4 +14,18 @@ public class RecyclerViewConstants {
 
     static final boolean ALLOW_SIZE_IN_UNSPECIFIED_SPEC = Build.VERSION.SDK_INT >= 23;
 
+    /**
+     * OnLayout has been called by the View system.
+     * If this shows up too many times in Systrace, make sure the children of RecyclerView do not
+     * update themselves directly. This will cause a full re-layout but when it happens via the
+     * Adapter notifyItemChanged, RecyclerView can avoid full layout calculation.
+     */
+    static final String TRACE_ON_LAYOUT_TAG = "RV OnLayout";
+
+    /**
+     * The RecyclerView is currently animating to a final position while not under
+     * outside control.
+     * @see #getScrollState()
+     */
+    public static final int SCROLL_STATE_SETTLING = 2;
 }

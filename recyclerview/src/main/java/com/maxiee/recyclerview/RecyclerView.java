@@ -27,9 +27,12 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.widget.OverScroller;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.DEBUG;
+import static com.maxiee.recyclerview.RecyclerViewConstants.SCROLL_STATE_SETTLING;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
+import static com.maxiee.recyclerview.RecyclerViewConstants.TRACE_ON_LAYOUT_TAG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.VERBOSE_TRACING;
 
 public class RecyclerView extends ViewGroup {
@@ -42,8 +45,42 @@ public class RecyclerView extends ViewGroup {
      */
     boolean mClipToPadding;
 
+    Adapter mAdapter;
+
     @VisibleForTesting
     LayoutManager mLayout;
+
+    @VisibleForTesting
+    boolean mFirstLayoutComplete;
+
+    // Counting lock to control whether we should ignore requestLayout calls from children or not.
+    private int mEatRequestLayout = 0;
+
+    boolean mLayoutRequestEaten;
+
+    /**
+     * Set to true when an adapter data set changed notification is received.
+     * In that case, we cannot run any animations since we don't know what happened until layout.
+     *
+     * Attached items are invalid until next layout, at which point layout will animate/replace
+     * items as necessary, building up content from the (effectively) new adapter from scratch.
+     *
+     * Cached items must be discarded when setting this to true, so that the cache may be freely
+     * used by prefetching until the next layout occurs.
+     *
+     * @see #setDataSetChangedAfterLayout()
+     */
+    boolean mDataSetHasChangedAfterLayout = false;
+
+    /**
+     * This variable is incremented during a dispatchLayout and/or scroll.
+     * Some methods should not be called during these periods (e.g. adapter data change).
+     * Doing so will create hard to find bugs so we better check it and throw an exception.
+     *
+     * @see #assertInLayoutOrScroll(String)
+     * @see #assertNotInLayoutOrScroll(String)
+     */
+    private int mLayoutOrScrollCounter = 0;
 
     ItemAnimator mItemAnimator = new DefaultItemAnimator();
 
@@ -57,6 +94,12 @@ public class RecyclerView extends ViewGroup {
      */
     ChildHelper mChildHelper;
 
+    /**
+     * Keeps data about views to be used for animations
+     * 保存视图相关数据, 用于动画
+     */
+    final ViewInfoStore mViewInfoStore = new ViewInfoStore();
+
     // Touch/scrolling handling
     private int mTouchSlop;
     private final int mMinFlingVelocity;
@@ -65,6 +108,8 @@ public class RecyclerView extends ViewGroup {
     // This value is used when handling rotary encoder generic motion events.
     private float mScaledHorizontalScrollFactor = Float.MIN_VALUE;
     private float mScaledVerticalScrollFactor = Float.MIN_VALUE;
+
+    final ViewFlinger mViewFlinger = new ViewFlinger();
 
     final State mState = new State();
 
@@ -321,15 +366,233 @@ public class RecyclerView extends ViewGroup {
         });
     }
 
+    @Override
+    protected void onLayout(boolean b, int i, int i1, int i2, int i3) {
+        TraceCompat.beginSection(TRACE_ON_LAYOUT_TAG);
+        dispatchLayout();
+        TraceCompat.endSection();
+        mFirstLayoutComplete = true;
+    }
+
+    /**
+     * Wrapper around layoutChildren() that handles animating changes caused by layout.
+     * Animations work on the assumption that there are five different kinds of items
+     * in play:
+     * PERSISTENT: items are visible before and after layout
+     * REMOVED: items were visible before layout and were removed by the app
+     * ADDED: items did not exist before layout and were added by the app
+     * DISAPPEARING: items exist in the data set before/after, but changed from
+     * visible to non-visible in the process of layout (they were moved off
+     * screen as a side-effect of other changes)
+     * APPEARING: items exist in the data set before/after, but changed from
+     * non-visible to visible in the process of layout (they were moved on
+     * screen as a side-effect of other changes)
+     * The overall approach figures out what items exist before/after layout and
+     * infers one of the five above states for each of the items. Then the animations
+     * are set up accordingly:
+     * PERSISTENT views are animated via
+     * {@link ItemAnimator#animatePersistence(ViewHolder, ItemHolderInfo, ItemHolderInfo)}
+     * DISAPPEARING views are animated via
+     * {@link ItemAnimator#animateDisappearance(ViewHolder, ItemHolderInfo, ItemHolderInfo)}
+     * APPEARING views are animated via
+     * {@link ItemAnimator#animateAppearance(ViewHolder, ItemHolderInfo, ItemHolderInfo)}
+     * and changed views are animated via
+     * {@link ItemAnimator#animateChange(ViewHolder, ViewHolder, ItemHolderInfo, ItemHolderInfo)}.
+     */
+    void dispatchLayout() {
+        if (mAdapter == null) {
+            Log.e(TAG, "No adapter attached; skipping layout");
+            // leave the state in START
+            return;
+        }
+        if (mLayout == null) {
+            Log.e(TAG, "No layout manager attached; skipping layout");
+            // leave the state in START
+            return;
+        }
+        mState.mIsMeasuring = false;
+        if (mState.mLayoutStep == State.STEP_START) {
+            dispatchLayoutStep1();
+            mLayout.setExactMeasureSpecsFrom(this);
+            dispatchLayoutStep2();
+        } else if (mAdapterHelper.hasUpdates() || mLayout.getWidth() != getWidth()
+                || mLayout.getHeight() != getHeight()) {
+            // First 2 steps are done in onMeasure but looks like we have to run again due to
+            // changed size.
+            mLayout.setExactMeasureSpecsFrom(this);
+            dispatchLayoutStep2();
+        } else {
+            // always make sure we sync them (to ensure mode is exact)
+            mLayout.setExactMeasureSpecsFrom(this);
+        }
+        dispatchLayoutStep3();
+    }
+
+    /**
+     * The first step of a layout where we;
+     * - process adapter updates
+     * - decide which animation should run
+     * - save information about current views
+     * - If necessary, run predictive layout and save its information
+     */
+    private void dispatchLayoutStep1() {
+        mState.assertLayoutStep(State.STEP_START);
+        fillRemainingScrollValues(mState);
+        mState.mIsMeasuring = false;
+        eatRequestLayout();
+        mViewInfoStore.clear();
+        onEnterLayoutOrScroll();
+        processAdapterUpdatesAndSetAnimationFlags();
+        saveFocusInfo();
+        mState.mTrackOldChangeHolders = mState.mRunSimpleAnimations && mItemsChanged;
+        mItemsAddedOrRemoved = mItemsChanged = false;
+        mState.mInPreLayout = mState.mRunPredictiveAnimations;
+        mState.mItemCount = mAdapter.getItemCount();
+        findMinMaxChildLayoutPositions(mMinMaxLayoutPositions);
+
+        if (mState.mRunSimpleAnimations) {
+            // Step 0: Find out where all non-removed items are, pre-layout
+            int count = mChildHelper.getChildCount();
+            for (int i = 0; i < count; ++i) {
+                final ViewHolder holder = getChildViewHolderInt(mChildHelper.getChildAt(i));
+                if (holder.shouldIgnore() || (holder.isInvalid() && !mAdapter.hasStableIds())) {
+                    continue;
+                }
+                final ItemHolderInfo animationInfo = mItemAnimator
+                        .recordPreLayoutInformation(mState, holder,
+                                ItemAnimator.buildAdapterChangeFlagsForAnimations(holder),
+                                holder.getUnmodifiedPayloads());
+                mViewInfoStore.addToPreLayout(holder, animationInfo);
+                if (mState.mTrackOldChangeHolders && holder.isUpdated() && !holder.isRemoved()
+                        && !holder.shouldIgnore() && !holder.isInvalid()) {
+                    long key = getChangedHolderKey(holder);
+                    // This is NOT the only place where a ViewHolder is added to old change holders
+                    // list. There is another case where:
+                    //    * A VH is currently hidden but not deleted
+                    //    * The hidden item is changed in the adapter
+                    //    * Layout manager decides to layout the item in the pre-Layout pass (step1)
+                    // When this case is detected, RV will un-hide that view and add to the old
+                    // change holders list.
+                    mViewInfoStore.addToOldChangeHolders(key, holder);
+                }
+            }
+        }
+        if (mState.mRunPredictiveAnimations) {
+            // Step 1: run prelayout: This will use the old positions of items. The layout manager
+            // is expected to layout everything, even removed items (though not to add removed
+            // items back to the container). This gives the pre-layout position of APPEARING views
+            // which come into existence as part of the real layout.
+
+            // Save old positions so that LayoutManager can run its mapping logic.
+            saveOldPositions();
+            final boolean didStructureChange = mState.mStructureChanged;
+            mState.mStructureChanged = false;
+            // temporarily disable flag because we are asking for previous layout
+            mLayout.onLayoutChildren(mRecycler, mState);
+            mState.mStructureChanged = didStructureChange;
+
+            for (int i = 0; i < mChildHelper.getChildCount(); ++i) {
+                final View child = mChildHelper.getChildAt(i);
+                final ViewHolder viewHolder = getChildViewHolderInt(child);
+                if (viewHolder.shouldIgnore()) {
+                    continue;
+                }
+                if (!mViewInfoStore.isInPreLayout(viewHolder)) {
+                    int flags = ItemAnimator.buildAdapterChangeFlagsForAnimations(viewHolder);
+                    boolean wasHidden = viewHolder
+                            .hasAnyOfTheFlags(ViewHolder.FLAG_BOUNCED_FROM_HIDDEN_LIST);
+                    if (!wasHidden) {
+                        flags |= ItemAnimator.FLAG_APPEARED_IN_PRE_LAYOUT;
+                    }
+                    final ItemHolderInfo animationInfo = mItemAnimator.recordPreLayoutInformation(
+                            mState, viewHolder, flags, viewHolder.getUnmodifiedPayloads());
+                    if (wasHidden) {
+                        recordAnimationInfoIfBouncedHiddenView(viewHolder, animationInfo);
+                    } else {
+                        mViewInfoStore.addToAppearedInPreLayoutHolders(viewHolder, animationInfo);
+                    }
+                }
+            }
+            // we don't process disappearing list because they may re-appear in post layout pass.
+            clearOldPositions();
+        } else {
+            clearOldPositions();
+        }
+        onExitLayoutOrScroll();
+        resumeRequestLayout(false);
+        mState.mLayoutStep = State.STEP_LAYOUT;
+    }
+
+    void eatRequestLayout() {
+        mEatRequestLayout++;
+        if (mEatRequestLayout == 1 && !mLayoutFrozen) {
+            mLayoutRequestEaten = false;
+        }
+    }
+
+    void onEnterLayoutOrScroll() {
+        mLayoutOrScrollCounter++;
+    }
+
+    /**
+     * Consumes adapter updates and calculates which type of animations we want to run.
+     * Called in onMeasure and dispatchLayout.
+     * 使用 Adapter 更新并计算我们想要运行的动画类型. 在 onMeasure 和 dispatchLayout 中被调用.
+     *
+     * $HTT$ 这里的 Consumes 该如何翻译?
+     *
+     * <p>
+     * This method may process only the pre-layout state of updates or all of them.
+     * 这个方法只处理所有的 pre-layout 的更新
+     */
+    private void processAdapterUpdatesAndSetAnimationFlags() {
+        if (mDataSetHasChangedAfterLayout) {
+            // Processing these items have no value since data set changed unexpectedly.
+            // Instead, we just reset it.
+            mAdapterHelper.reset();
+            mLayout.onItemsChanged(this);
+        }
+        // simple animations are a subset of advanced animations (which will cause a
+        // pre-layout step)
+        // If layout supports predictive animations, pre-process to decide if we want to run them
+        if (predictiveItemAnimationsEnabled()) {
+            mAdapterHelper.preProcess();
+        } else {
+            mAdapterHelper.consumeUpdatesInOnePass();
+        }
+        boolean animationTypeSupported = mItemsAddedOrRemoved || mItemsChanged;
+        mState.mRunSimpleAnimations = mFirstLayoutComplete
+                && mItemAnimator != null
+                && (mDataSetHasChangedAfterLayout
+                || animationTypeSupported
+                || mLayout.mRequestedSimpleAnimations)
+                && (!mDataSetHasChangedAfterLayout
+                || mAdapter.hasStableIds());
+        mState.mRunPredictiveAnimations = mState.mRunSimpleAnimations
+                && animationTypeSupported
+                && !mDataSetHasChangedAfterLayout
+                && predictiveItemAnimationsEnabled();
+    }
+
+    private boolean predictiveItemAnimationsEnabled() {
+        return (mItemAnimator != null && mLayout.supportsPredictiveItemAnimations());
+    }
+
+    final void fillRemainingScrollValues(State state) {
+        if (getScrollState() == SCROLL_STATE_SETTLING) {
+            final OverScroller scroller = mViewFlinger.mScroller;
+            state.mRemainingScrollHorizontal = scroller.getFinalX() - scroller.getCurrX();
+            state.mRemainingScrollVertical = scroller.getFinalY() - scroller.getCurrY();
+        } else {
+            state.mRemainingScrollHorizontal = 0;
+            state.mRemainingScrollVertical = 0;
+        }
+    }
+
     static ViewHolder getChildViewHolderInt(View child) {
         if (child == null) {
             return null;
         }
         return ((com.maxiee.recyclerview.LayoutParams) child.getLayoutParams()).mViewHolder;
-    }
-
-    @Override
-    protected void onLayout(boolean b, int i, int i1, int i2, int i3) {
-
     }
 }
