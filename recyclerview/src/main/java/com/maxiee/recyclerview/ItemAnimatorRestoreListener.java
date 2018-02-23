@@ -8,8 +8,7 @@ package com.maxiee.recyclerview;
  */
 class ItemAnimatorRestoreListener implements ItemAnimator.ItemAnimatorListener {
 
-    ItemAnimatorRestoreListener() {
-    }
+    ItemAnimatorRestoreListener() {}
 
     @Override
     public void onAnimationFinished(ViewHolder item) {
