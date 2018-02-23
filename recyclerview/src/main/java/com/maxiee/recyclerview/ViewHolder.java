@@ -227,7 +227,7 @@ public abstract class ViewHolder {
      * <p>
      * LayoutManagers should always call this method while doing calculations based on item
      * positions. All methods in {@link RecyclerView.LayoutManager}, {@link RecyclerView.State},
-     * {@link RecyclerView.Recycler} that receive a position expect it to be the layout position
+     * {@link Recycler} that receive a position expect it to be the layout position
      * of the item.
      * <p>
      * If LayoutManager needs to call an external method that requires the adapter position of

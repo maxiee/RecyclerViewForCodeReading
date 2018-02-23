@@ -2,7 +2,7 @@
 
 The source code of RecyclerView in Android support library is a bit hard for reading:
 
-- It hold almost all code of RecyclerView in a single file, which contains more than 2w line.
+- It hold almost all code of RecyclerView in a single file, which contains more than 20k+ lines.
 - The relation of classes is hard to recognize
 
 So I rearrange the source, splitting the classes into separate files, make it better for code reading.

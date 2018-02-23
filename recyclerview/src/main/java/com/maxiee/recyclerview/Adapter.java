@@ -14,7 +14,7 @@ import java.util.List;
  *
  * @param <VH> A class that extends ViewHolder that will be used by the adapter.
  */
-public abstract class Adapter {
+public abstract class Adapter<VH extends ViewHolder> {
     private final AdapterDataObservable mObservable = new AdapterDataObservable();
     private boolean mHasStableIds = false;
 
