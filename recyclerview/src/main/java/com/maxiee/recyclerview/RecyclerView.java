@@ -19,6 +19,7 @@ package com.maxiee.recyclerview;
 
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.support.annotation.Nullable;
 import android.support.annotation.VisibleForTesting;
 import android.support.v4.os.TraceCompat;
 import android.support.v4.view.ViewConfigurationCompat;
@@ -27,9 +28,11 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.OverScroller;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.DEBUG;
+import static com.maxiee.recyclerview.RecyclerViewConstants.NO_POSITION;
 import static com.maxiee.recyclerview.RecyclerViewConstants.SCROLL_STATE_SETTLING;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TRACE_ON_LAYOUT_TAG;
@@ -84,6 +87,8 @@ public class RecyclerView extends ViewGroup {
 
     ItemAnimator mItemAnimator = new DefaultItemAnimator();
 
+    final Recycler mRecycler = new Recycler();
+
     /**
      * Handles adapter updates
      */
@@ -108,6 +113,8 @@ public class RecyclerView extends ViewGroup {
     // This value is used when handling rotary encoder generic motion events.
     private float mScaledHorizontalScrollFactor = Float.MIN_VALUE;
     private float mScaledVerticalScrollFactor = Float.MIN_VALUE;
+
+    private boolean mPreserveFocusAfterLayout = true;
 
     final ViewFlinger mViewFlinger = new ViewFlinger();
 
@@ -535,6 +542,14 @@ public class RecyclerView extends ViewGroup {
     }
 
     /**
+     * Returns a unique key to be used while handling change animations.
+     * It might be child's position or stable id depending on the adapter type.
+     */
+    long getChangedHolderKey(ViewHolder holder) {
+        return mAdapter.hasStableIds() ? holder.getItemId() : holder.mPosition;
+    }
+
+    /**
      * Consumes adapter updates and calculates which type of animations we want to run.
      * Called in onMeasure and dispatchLayout.
      * 使用 Adapter 更新并计算我们想要运行的动画类型. 在 onMeasure 和 dispatchLayout 中被调用.
@@ -574,6 +589,32 @@ public class RecyclerView extends ViewGroup {
                 && predictiveItemAnimationsEnabled();
     }
 
+    private void findMinMaxChildLayoutPositions(int[] into) {
+        final int count = mChildHelper.getChildCount();
+        if (count == 0) {
+            into[0] = NO_POSITION;
+            into[1] = NO_POSITION;
+            return;
+        }
+        int minPositionPreLayout = Integer.MAX_VALUE;
+        int maxPositionPreLayout = Integer.MIN_VALUE;
+        for (int i = 0; i < count; ++i) {
+            final ViewHolder holder = getChildViewHolderInt(mChildHelper.getChildAt(i));
+            if (holder.shouldIgnore()) {
+                continue;
+            }
+            final int pos = holder.getLayoutPosition();
+            if (pos < minPositionPreLayout) {
+                minPositionPreLayout = pos;
+            }
+            if (pos > maxPositionPreLayout) {
+                maxPositionPreLayout = pos;
+            }
+        }
+        into[0] = minPositionPreLayout;
+        into[1] = maxPositionPreLayout;
+    }
+
     private boolean predictiveItemAnimationsEnabled() {
         return (mItemAnimator != null && mLayout.supportsPredictiveItemAnimations());
     }
@@ -589,10 +630,137 @@ public class RecyclerView extends ViewGroup {
         }
     }
 
+    private void saveFocusInfo() {
+        View child = null;
+        if (mPreserveFocusAfterLayout && hasFocus() && mAdapter != null) {
+            child = getFocusedChild();
+        }
+
+        final ViewHolder focusedVh = child == null ? null : findContainingViewHolder(child);
+        if (focusedVh == null) {
+            resetFocusInfo();
+        } else {
+            mState.mFocusedItemId = mAdapter.hasStableIds() ? focusedVh.getItemId() : NO_ID;
+            // mFocusedItemPosition should hold the current adapter position of the previously
+            // focused item. If the item is removed, we store the previous adapter position of the
+            // removed item.
+            mState.mFocusedItemPosition = mDataSetHasChangedAfterLayout ? NO_POSITION
+                    : (focusedVh.isRemoved() ? focusedVh.mOldPosition
+                    : focusedVh.getAdapterPosition());
+            mState.mFocusedSubChildId = getDeepestFocusedViewWithId(focusedVh.itemView);
+        }
+    }
+
+    private int getDeepestFocusedViewWithId(View view) {
+        int lastKnownId = view.getId();
+        while (!view.isFocused() && view instanceof ViewGroup && view.hasFocus()) {
+            view = ((ViewGroup) view).getFocusedChild();
+            final int id = view.getId();
+            if (id != View.NO_ID) {
+                lastKnownId = view.getId();
+            }
+        }
+        return lastKnownId;
+    }
+
+    private void resetFocusInfo() {
+        mState.mFocusedItemId = NO_ID;
+        mState.mFocusedItemPosition = NO_POSITION;
+        mState.mFocusedSubChildId = View.NO_ID;
+    }
+
     static ViewHolder getChildViewHolderInt(View child) {
         if (child == null) {
             return null;
         }
         return ((com.maxiee.recyclerview.LayoutParams) child.getLayoutParams()).mViewHolder;
+    }
+
+    /**
+     * Retrieve the {@link ViewHolder} for the given child view.
+     *
+     * @param child Child of this RecyclerView to query for its ViewHolder
+     * @return The child view's ViewHolder
+     */
+    public ViewHolder getChildViewHolder(View child) {
+        final ViewParent parent = child.getParent();
+        if (parent != null && parent != this) {
+            throw new IllegalArgumentException("View " + child + " is not a direct child of "
+                    + this);
+        }
+        return getChildViewHolderInt(child);
+    }
+
+    /**
+     * Traverses the ancestors of the given view and returns the item view that contains it and
+     * also a direct child of the RecyclerView. This returned view can be used to get the
+     * ViewHolder by calling {@link #getChildViewHolder(View)}.
+     *
+     * @param view The view that is a descendant of the RecyclerView.
+     *
+     * @return The direct child of the RecyclerView which contains the given view or null if the
+     * provided view is not a descendant of this RecyclerView.
+     *
+     * @see #getChildViewHolder(View)
+     * @see #findContainingViewHolder(View)
+     */
+    @Nullable
+    public View findContainingItemView(View view) {
+        ViewParent parent = view.getParent();
+        while (parent != null && parent != this && parent instanceof View) {
+            view = (View) parent;
+            parent = view.getParent();
+        }
+        return parent == this ? view : null;
+    }
+
+    /**
+     * Returns the ViewHolder that contains the given view.
+     *
+     * @param view The view that is a descendant of the RecyclerView.
+     *
+     * @return The ViewHolder that contains the given view or null if the provided view is not a
+     * descendant of this RecyclerView.
+     */
+    @Nullable
+    public ViewHolder findContainingViewHolder(View view) {
+        View itemView = findContainingItemView(view);
+        return itemView == null ? null : getChildViewHolder(itemView);
+    }
+
+    void saveOldPositions() {
+        final int childCount = mChildHelper.getUnfilteredChildCount();
+        for (int i = 0; i < childCount; i++) {
+            final ViewHolder holder = getChildViewHolderInt(mChildHelper.getUnfilteredChildAt(i));
+            if (DEBUG && holder.mPosition == -1 && !holder.isRemoved()) {
+                throw new IllegalStateException("view holder cannot have position -1 unless it"
+                        + " is removed" + exceptionLabel());
+            }
+            if (!holder.shouldIgnore()) {
+                holder.saveOldPosition();
+            }
+        }
+    }
+
+    void clearOldPositions() {
+        final int childCount = mChildHelper.getUnfilteredChildCount();
+        for (int i = 0; i < childCount; i++) {
+            final ViewHolder holder = getChildViewHolderInt(mChildHelper.getUnfilteredChildAt(i));
+            if (!holder.shouldIgnore()) {
+                holder.clearOldPosition();
+            }
+        }
+        mRecycler.clearOldPositions();
+    }
+
+    /**
+     * Label appended to all public exception strings, used to help find which RV in an app is
+     * hitting an exception.
+     */
+    String exceptionLabel() {
+        return " " + super.toString()
+                + ", adapter:" + mAdapter
+                + ", layout:" + mLayout
+                + ", context:" + getContext();
     }
 }

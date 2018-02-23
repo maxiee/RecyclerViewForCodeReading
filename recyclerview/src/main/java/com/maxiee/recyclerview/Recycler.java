@@ -629,4 +629,418 @@ public class Recycler {
             holder.mOwnerRecyclerView = null;
         }
     }
+
+    /**
+     * Prepares the ViewHolder to be removed/recycled, and inserts it into the RecycledViewPool.
+     *
+     * Pass false to dispatchRecycled for views that have not been bound.
+     *
+     * @param holder Holder to be added to the pool.
+     * @param dispatchRecycled True to dispatch View recycled callbacks.
+     */
+    void addViewHolderToRecycledViewPool(ViewHolder holder, boolean dispatchRecycled) {
+        clearNestedRecyclerViewIfNotNested(holder);
+        if (holder.hasAnyOfTheFlags(ViewHolder.FLAG_SET_A11Y_ITEM_DELEGATE)) {
+            holder.setFlags(0, ViewHolder.FLAG_SET_A11Y_ITEM_DELEGATE);
+            ViewCompat.setAccessibilityDelegate(holder.itemView, null);
+        }
+        if (dispatchRecycled) {
+            dispatchViewRecycled(holder);
+        }
+        holder.mOwnerRecyclerView = null;
+        getRecycledViewPool().putRecycledView(holder);
+    }
+
+    /**
+     * Used as a fast path for unscrapping and recycling a view during a bulk operation.
+     * The caller must call {@link #clearScrap()} when it's done to update the recycler's
+     * internal bookkeeping.
+     */
+    void quickRecycleScrapView(View view) {
+        final ViewHolder holder = getChildViewHolderInt(view);
+        holder.mScrapContainer = null;
+        holder.mInChangeScrap = false;
+        holder.clearReturnedFromScrapFlag();
+        recycleViewHolderInternal(holder);
+    }
+
+    /**
+     * Mark an attached view as scrap.
+     *
+     * <p>"Scrap" views are still attached to their parent RecyclerView but are eligible
+     * for rebinding and reuse. Requests for a view for a given position may return a
+     * reused or rebound scrap view instance.</p>
+     *
+     * @param view View to scrap
+     */
+    void scrapView(View view) {
+        final ViewHolder holder = getChildViewHolderInt(view);
+        if (holder.hasAnyOfTheFlags(ViewHolder.FLAG_REMOVED | ViewHolder.FLAG_INVALID)
+                || !holder.isUpdated() || canReuseUpdatedViewHolder(holder)) {
+            if (holder.isInvalid() && !holder.isRemoved() && !mAdapter.hasStableIds()) {
+                throw new IllegalArgumentException("Called scrap view with an invalid view."
+                        + " Invalid views cannot be reused from scrap, they should rebound from"
+                        + " recycler pool." + exceptionLabel());
+            }
+            holder.setScrapContainer(this, false);
+            mAttachedScrap.add(holder);
+        } else {
+            if (mChangedScrap == null) {
+                mChangedScrap = new ArrayList<ViewHolder>();
+            }
+            holder.setScrapContainer(this, true);
+            mChangedScrap.add(holder);
+        }
+    }
+
+    /**
+     * Remove a previously scrapped view from the pool of eligible scrap.
+     *
+     * <p>This view will no longer be eligible for reuse until re-scrapped or
+     * until it is explicitly removed and recycled.</p>
+     */
+    void unscrapView(ViewHolder holder) {
+        if (holder.mInChangeScrap) {
+            mChangedScrap.remove(holder);
+        } else {
+            mAttachedScrap.remove(holder);
+        }
+        holder.mScrapContainer = null;
+        holder.mInChangeScrap = false;
+        holder.clearReturnedFromScrapFlag();
+    }
+
+    int getScrapCount() {
+        return mAttachedScrap.size();
+    }
+
+    View getScrapViewAt(int index) {
+        return mAttachedScrap.get(index).itemView;
+    }
+
+    void clearScrap() {
+        mAttachedScrap.clear();
+        if (mChangedScrap != null) {
+            mChangedScrap.clear();
+        }
+    }
+
+    ViewHolder getChangedScrapViewForPosition(int position) {
+        // If pre-layout, check the changed scrap for an exact match.
+        final int changedScrapSize;
+        if (mChangedScrap == null || (changedScrapSize = mChangedScrap.size()) == 0) {
+            return null;
+        }
+        // find by position
+        for (int i = 0; i < changedScrapSize; i++) {
+            final ViewHolder holder = mChangedScrap.get(i);
+            if (!holder.wasReturnedFromScrap() && holder.getLayoutPosition() == position) {
+                holder.addFlags(ViewHolder.FLAG_RETURNED_FROM_SCRAP);
+                return holder;
+            }
+        }
+        // find by id
+        if (mAdapter.hasStableIds()) {
+            final int offsetPosition = mAdapterHelper.findPositionOffset(position);
+            if (offsetPosition > 0 && offsetPosition < mAdapter.getItemCount()) {
+                final long id = mAdapter.getItemId(offsetPosition);
+                for (int i = 0; i < changedScrapSize; i++) {
+                    final ViewHolder holder = mChangedScrap.get(i);
+                    if (!holder.wasReturnedFromScrap() && holder.getItemId() == id) {
+                        holder.addFlags(ViewHolder.FLAG_RETURNED_FROM_SCRAP);
+                        return holder;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns a view for the position either from attach scrap, hidden children, or cache.
+     *
+     * @param position Item position
+     * @param dryRun  Does a dry run, finds the ViewHolder but does not remove
+     * @return a ViewHolder that can be re-used for this position.
+     */
+    ViewHolder getScrapOrHiddenOrCachedHolderForPosition(int position, boolean dryRun) {
+        final int scrapCount = mAttachedScrap.size();
+
+        // Try first for an exact, non-invalid match from scrap.
+        for (int i = 0; i < scrapCount; i++) {
+            final ViewHolder holder = mAttachedScrap.get(i);
+            if (!holder.wasReturnedFromScrap() && holder.getLayoutPosition() == position
+                    && !holder.isInvalid() && (mState.mInPreLayout || !holder.isRemoved())) {
+                holder.addFlags(ViewHolder.FLAG_RETURNED_FROM_SCRAP);
+                return holder;
+            }
+        }
+
+        if (!dryRun) {
+            View view = mChildHelper.findHiddenNonRemovedView(position);
+            if (view != null) {
+                // This View is good to be used. We just need to unhide, detach and move to the
+                // scrap list.
+                final ViewHolder vh = getChildViewHolderInt(view);
+                mChildHelper.unhide(view);
+                int layoutIndex = mChildHelper.indexOfChild(view);
+                if (layoutIndex == RecyclerView.NO_POSITION) {
+                    throw new IllegalStateException("layout index should not be -1 after "
+                            + "unhiding a view:" + vh + exceptionLabel());
+                }
+                mChildHelper.detachViewFromParent(layoutIndex);
+                scrapView(view);
+                vh.addFlags(ViewHolder.FLAG_RETURNED_FROM_SCRAP
+                        | ViewHolder.FLAG_BOUNCED_FROM_HIDDEN_LIST);
+                return vh;
+            }
+        }
+
+        // Search in our first-level recycled view cache.
+        final int cacheSize = mCachedViews.size();
+        for (int i = 0; i < cacheSize; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            // invalid view holders may be in cache if adapter has stable ids as they can be
+            // retrieved via getScrapOrCachedViewForId
+            if (!holder.isInvalid() && holder.getLayoutPosition() == position) {
+                if (!dryRun) {
+                    mCachedViews.remove(i);
+                }
+                if (DEBUG) {
+                    Log.d(TAG, "getScrapOrHiddenOrCachedHolderForPosition(" + position
+                            + ") found match in cache: " + holder);
+                }
+                return holder;
+            }
+        }
+        return null;
+    }
+
+    ViewHolder getScrapOrCachedViewForId(long id, int type, boolean dryRun) {
+        // Look in our attached views first
+        final int count = mAttachedScrap.size();
+        for (int i = count - 1; i >= 0; i--) {
+            final ViewHolder holder = mAttachedScrap.get(i);
+            if (holder.getItemId() == id && !holder.wasReturnedFromScrap()) {
+                if (type == holder.getItemViewType()) {
+                    holder.addFlags(ViewHolder.FLAG_RETURNED_FROM_SCRAP);
+                    if (holder.isRemoved()) {
+                        // this might be valid in two cases:
+                        // > item is removed but we are in pre-layout pass
+                        // >> do nothing. return as is. make sure we don't rebind
+                        // > item is removed then added to another position and we are in
+                        // post layout.
+                        // >> remove removed and invalid flags, add update flag to rebind
+                        // because item was invisible to us and we don't know what happened in
+                        // between.
+                        if (!mState.isPreLayout()) {
+                            holder.setFlags(ViewHolder.FLAG_UPDATE, ViewHolder.FLAG_UPDATE
+                                    | ViewHolder.FLAG_INVALID | ViewHolder.FLAG_REMOVED);
+                        }
+                    }
+                    return holder;
+                } else if (!dryRun) {
+                    // if we are running animations, it is actually better to keep it in scrap
+                    // but this would force layout manager to lay it out which would be bad.
+                    // Recycle this scrap. Type mismatch.
+                    mAttachedScrap.remove(i);
+                    removeDetachedView(holder.itemView, false);
+                    quickRecycleScrapView(holder.itemView);
+                }
+            }
+        }
+
+        // Search the first-level cache
+        final int cacheSize = mCachedViews.size();
+        for (int i = cacheSize - 1; i >= 0; i--) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder.getItemId() == id) {
+                if (type == holder.getItemViewType()) {
+                    if (!dryRun) {
+                        mCachedViews.remove(i);
+                    }
+                    return holder;
+                } else if (!dryRun) {
+                    recycleCachedViewAt(i);
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    void dispatchViewRecycled(ViewHolder holder) {
+        if (mRecyclerListener != null) {
+            mRecyclerListener.onViewRecycled(holder);
+        }
+        if (mAdapter != null) {
+            mAdapter.onViewRecycled(holder);
+        }
+        if (mState != null) {
+            mViewInfoStore.removeViewHolder(holder);
+        }
+        if (DEBUG) Log.d(TAG, "dispatchViewRecycled: " + holder);
+    }
+
+    void onAdapterChanged(Adapter oldAdapter, Adapter newAdapter,
+                          boolean compatibleWithPrevious) {
+        clear();
+        getRecycledViewPool().onAdapterChanged(oldAdapter, newAdapter, compatibleWithPrevious);
+    }
+
+    void offsetPositionRecordsForMove(int from, int to) {
+        final int start, end, inBetweenOffset;
+        if (from < to) {
+            start = from;
+            end = to;
+            inBetweenOffset = -1;
+        } else {
+            start = to;
+            end = from;
+            inBetweenOffset = 1;
+        }
+        final int cachedCount = mCachedViews.size();
+        for (int i = 0; i < cachedCount; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder == null || holder.mPosition < start || holder.mPosition > end) {
+                continue;
+            }
+            if (holder.mPosition == from) {
+                holder.offsetPosition(to - from, false);
+            } else {
+                holder.offsetPosition(inBetweenOffset, false);
+            }
+            if (DEBUG) {
+                Log.d(TAG, "offsetPositionRecordsForMove cached child " + i + " holder "
+                        + holder);
+            }
+        }
+    }
+
+    void offsetPositionRecordsForInsert(int insertedAt, int count) {
+        final int cachedCount = mCachedViews.size();
+        for (int i = 0; i < cachedCount; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder != null && holder.mPosition >= insertedAt) {
+                if (DEBUG) {
+                    Log.d(TAG, "offsetPositionRecordsForInsert cached " + i + " holder "
+                            + holder + " now at position " + (holder.mPosition + count));
+                }
+                holder.offsetPosition(count, true);
+            }
+        }
+    }
+
+    /**
+     * @param removedFrom Remove start index
+     * @param count Remove count
+     * @param applyToPreLayout If true, changes will affect ViewHolder's pre-layout position, if
+     *                         false, they'll be applied before the second layout pass
+     */
+    void offsetPositionRecordsForRemove(int removedFrom, int count, boolean applyToPreLayout) {
+        final int removedEnd = removedFrom + count;
+        final int cachedCount = mCachedViews.size();
+        for (int i = cachedCount - 1; i >= 0; i--) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder != null) {
+                if (holder.mPosition >= removedEnd) {
+                    if (DEBUG) {
+                        Log.d(TAG, "offsetPositionRecordsForRemove cached " + i
+                                + " holder " + holder + " now at position "
+                                + (holder.mPosition - count));
+                    }
+                    holder.offsetPosition(-count, applyToPreLayout);
+                } else if (holder.mPosition >= removedFrom) {
+                    // Item for this view was removed. Dump it from the cache.
+                    holder.addFlags(ViewHolder.FLAG_REMOVED);
+                    recycleCachedViewAt(i);
+                }
+            }
+        }
+    }
+
+    void setViewCacheExtension(ViewCacheExtension extension) {
+        mViewCacheExtension = extension;
+    }
+
+    void setRecycledViewPool(RecycledViewPool pool) {
+        if (mRecyclerPool != null) {
+            mRecyclerPool.detach();
+        }
+        mRecyclerPool = pool;
+        if (pool != null) {
+            mRecyclerPool.attach(getAdapter());
+        }
+    }
+
+    RecycledViewPool getRecycledViewPool() {
+        if (mRecyclerPool == null) {
+            mRecyclerPool = new RecycledViewPool();
+        }
+        return mRecyclerPool;
+    }
+
+    void viewRangeUpdate(int positionStart, int itemCount) {
+        final int positionEnd = positionStart + itemCount;
+        final int cachedCount = mCachedViews.size();
+        for (int i = cachedCount - 1; i >= 0; i--) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder == null) {
+                continue;
+            }
+
+            final int pos = holder.mPosition;
+            if (pos >= positionStart && pos < positionEnd) {
+                holder.addFlags(ViewHolder.FLAG_UPDATE);
+                recycleCachedViewAt(i);
+                // cached views should not be flagged as changed because this will cause them
+                // to animate when they are returned from cache.
+            }
+        }
+    }
+
+    void markKnownViewsInvalid() {
+        final int cachedCount = mCachedViews.size();
+        for (int i = 0; i < cachedCount; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            if (holder != null) {
+                holder.addFlags(ViewHolder.FLAG_UPDATE | ViewHolder.FLAG_INVALID);
+                holder.addChangePayload(null);
+            }
+        }
+
+        if (mAdapter == null || !mAdapter.hasStableIds()) {
+            // we cannot re-use cached views in this case. Recycle them all
+            recycleAndClearCachedViews();
+        }
+    }
+
+    void clearOldPositions() {
+        final int cachedCount = mCachedViews.size();
+        for (int i = 0; i < cachedCount; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            holder.clearOldPosition();
+        }
+        final int scrapCount = mAttachedScrap.size();
+        for (int i = 0; i < scrapCount; i++) {
+            mAttachedScrap.get(i).clearOldPosition();
+        }
+        if (mChangedScrap != null) {
+            final int changedScrapCount = mChangedScrap.size();
+            for (int i = 0; i < changedScrapCount; i++) {
+                mChangedScrap.get(i).clearOldPosition();
+            }
+        }
+    }
+
+    void markItemDecorInsetsDirty() {
+        final int cachedCount = mCachedViews.size();
+        for (int i = 0; i < cachedCount; i++) {
+            final ViewHolder holder = mCachedViews.get(i);
+            LayoutParams layoutParams = (LayoutParams) holder.itemView.getLayoutParams();
+            if (layoutParams != null) {
+                layoutParams.mInsetsDirty = true;
+            }
+        }
+    }
 }
