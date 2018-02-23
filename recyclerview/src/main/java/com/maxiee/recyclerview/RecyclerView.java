@@ -321,6 +321,13 @@ public class RecyclerView extends ViewGroup {
         });
     }
 
+    static ViewHolder getChildViewHolderInt(View child) {
+        if (child == null) {
+            return null;
+        }
+        return ((com.maxiee.recyclerview.LayoutParams) child.getLayoutParams()).mViewHolder;
+    }
+
     @Override
     protected void onLayout(boolean b, int i, int i1, int i2, int i3) {
 
