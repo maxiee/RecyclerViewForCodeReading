@@ -16,6 +16,7 @@ import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
 
 /**
  * A Recycler is responsible for managing scrapped or detached item views for reuse.
+ * Recycler 的职责是管理已销毁的或者已分离的项目视图, 用于重用.
  *
  * <p>A "scrapped" view is a view that is still attached to its parent RecyclerView but
  * that has been marked for removal or reuse.</p>

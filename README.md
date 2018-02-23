@@ -25,6 +25,14 @@ So, when I meet a sentence that I can't understand, A `$HTT$` label is add.
 
 You can help search `$HTT$` label through the project, translating the sentence into Chinese and then send a PR.
 
+## Translation Terminology
+
+|English|Chinese|
+|---|---|
+|scrapped|已销毁|
+|detached|已分离|
+|item views|项目视图|
+
 # License
 
 I just rearrange the source, make almost nothing new to it.
