@@ -12,13 +12,22 @@ import static com.maxiee.recyclerview.RecyclerViewConstants.NO_POSITION;
  * <p>Contains useful information about the current RecyclerView state like target scroll
  * position or view focus. State object can also keep arbitrary data, identified by resource
  * ids.</p>
+ * <p>包含关于当前 RecyclerView 的有用信息, 如目标滚动位置和视图焦点. 状态对象还可以保存由资源 id 标识的任意数据</p>
+ *
  * <p>Often times, RecyclerView components will need to pass information between each other.
  * To provide a well defined data bus between components, RecyclerView passes the same State
  * object to component callbacks and these components can use it to exchange data.</p>
+ * <p>通常, RecyclerView 组件之间需要相互传递信息. 为了在组件之间提供一个定义良好的数据总线, RecyclerView 将
+ * 相同的状态对象传递给组件回调, 这样这些组件可以用它来传递数据</p>
+ *
  * <p>If you implement custom components, you can use State's put/get/remove methods to pass
  * data between your components without needing to manage their lifecycles.</p>
+ * <p>如果你实现自定义组件, 你可以使用 State 的 put/get/remove 方法来在你的组件间传递数据而无需管理他们的生命周期.</p>
  */
 public class State {
+    /**
+     * 状态一共有 3 种:
+     */
     static final int STEP_START = 1;
     static final int STEP_LAYOUT = 1 << 1;
     static final int STEP_ANIMATIONS = 1 << 2;
@@ -39,10 +48,12 @@ public class State {
 
     ////////////////////////////////////////////////////////////////////////////////////////////
     // Fields below are carried from one layout pass to the next
+    // 下面的属性被从一个布局带到下一个
     ////////////////////////////////////////////////////////////////////////////////////////////
 
     /**
      * Number of items adapter had in the previous layout.
+     * 在之前布局中 adapter 项目的数量
      */
     int mPreviousLayoutItemCount = 0;
 
@@ -102,6 +113,10 @@ public class State {
 
     ////////////////////////////////////////////////////////////////////////////////////////////
 
+    /**
+     * 状态复位
+     * @return
+     */
     State reset() {
         mTargetPosition = NO_POSITION;
         if (mData != null) {

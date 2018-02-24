@@ -436,7 +436,9 @@ public class RecyclerView extends ViewGroup {
             // leave the state in START
             return;
         }
+
         mState.mIsMeasuring = false;
+
         if (mState.mLayoutStep == State.STEP_START) {
             dispatchLayoutStep1();
             mLayout.setExactMeasureSpecsFrom(this);
