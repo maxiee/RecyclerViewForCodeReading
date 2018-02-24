@@ -10,11 +10,16 @@ import android.view.ViewGroup;
  * {@link RecyclerView}. Custom {@link LayoutManager layout managers} are encouraged
  * to create their own subclass of this <code>LayoutParams</code> class
  * to store any additional required per-child view metadata about the layout.
+ *
+ * {@link android.view.ViewGroup.MarginLayoutParams LayoutParams} 的子类, 用于 RecyclerView 的子元素.
+ * 建议自定义 {@link LayoutManager layout managers} 对这个 <code>LayoutParams</code> 类创建他们自己的子类,
+ * 来保存附加的每个子视图都需要的关于布局的元数据.
  */
 public class LayoutParams extends android.view.ViewGroup.MarginLayoutParams {
     ViewHolder mViewHolder;
     final Rect mDecorInsets = new Rect();
     boolean mInsetsDirty = true;
+
     // Flag is set to true if the view is bound while it is detached from RV.
     // In this case, we need to manually call invalidate after view is added to guarantee that
     // invalidation is populated through the View hierarchy
@@ -110,5 +115,21 @@ public class LayoutParams extends android.view.ViewGroup.MarginLayoutParams {
      */
     public int getViewAdapterPosition() {
         return mViewHolder.getAdapterPosition();
+    }
+
+    /**
+     * set mViewHolder. add By Maxiee
+     * @param viewHolder
+     */
+    public void setViewHolder(ViewHolder viewHolder) {
+        mViewHolder = viewHolder;
+    }
+
+    /**
+     * get mViewHolder. add By Maxiee
+     * @return
+     */
+    public ViewHolder getViewHolder() {
+        return mViewHolder;
     }
 }
