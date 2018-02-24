@@ -13,6 +13,7 @@ import java.util.List;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.DEBUG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
+import static com.maxiee.recyclerview.RecyclerViewUtils.getChildViewHolderInt;
 
 /**
  * A Recycler is responsible for managing scrapped or detached item views for reuse.
@@ -20,6 +21,8 @@ import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
  *
  * <p>A "scrapped" view is a view that is still attached to its parent RecyclerView but
  * that has been marked for removal or reuse.</p>
+ *
+ * <p>被销毁的视图是指那种仍然附着在父 RecyclerView 上但是已经被标注为移除或者重用.</p>
  *
  * <p>Typical use of a Recycler by a {@link LayoutManager} will be to obtain views for
  * an adapter's data set representing the data at a given position or item ID.
@@ -29,22 +32,23 @@ import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
  * may be repositioned by a LayoutManager without remeasurement.</p>
  */
 public class Recycler {
+    static final int DEFAULT_CACHE_SIZE = 2;
+
     final ArrayList<ViewHolder> mAttachedScrap = new ArrayList<>();
+
     ArrayList<ViewHolder> mChangedScrap = null;
 
     final ArrayList<ViewHolder> mCachedViews = new ArrayList<ViewHolder>();
 
-    private final List<ViewHolder>
-            mUnmodifiableAttachedScrap = Collections.unmodifiableList(mAttachedScrap);
+    private final List<ViewHolder> mUnmodifiableAttachedScrap = Collections.unmodifiableList(mAttachedScrap);
 
     private int mRequestedCacheMax = DEFAULT_CACHE_SIZE;
+
     int mViewCacheMax = DEFAULT_CACHE_SIZE;
 
     RecycledViewPool mRecyclerPool;
 
     private ViewCacheExtension mViewCacheExtension;
-
-    static final int DEFAULT_CACHE_SIZE = 2;
 
     /**
      * Clear scrap views out of this recycler. Detached views contained within a

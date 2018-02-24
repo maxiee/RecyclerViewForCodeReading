@@ -37,6 +37,7 @@ import static com.maxiee.recyclerview.RecyclerViewConstants.SCROLL_STATE_SETTLIN
 import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TRACE_ON_LAYOUT_TAG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.VERBOSE_TRACING;
+import static com.maxiee.recyclerview.RecyclerViewUtils.getChildViewHolderInt;
 
 public class RecyclerView extends ViewGroup {
 
@@ -667,13 +668,6 @@ public class RecyclerView extends ViewGroup {
         mState.mFocusedItemId = NO_ID;
         mState.mFocusedItemPosition = NO_POSITION;
         mState.mFocusedSubChildId = View.NO_ID;
-    }
-
-    static ViewHolder getChildViewHolderInt(View child) {
-        if (child == null) {
-            return null;
-        }
-        return ((com.maxiee.recyclerview.LayoutParams) child.getLayoutParams()).mViewHolder;
     }
 
     /**

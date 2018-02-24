@@ -29,10 +29,13 @@ You can help search `$HTT$` label through the project, translating the sentence 
 
 |English|Chinese|
 |---|---|
+|attached|附着|
 |adapter|adapter (不译)|
+|cache|缓存|
 |detached|已分离|
 |item views|项目视图|
 |pre-layout|pre-layout (不译)|
+|removal|移除|
 |scrapped|已销毁|
 
 # License
