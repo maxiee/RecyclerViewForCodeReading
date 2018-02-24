@@ -34,6 +34,7 @@ You can help search `$HTT$` label through the project, translating the sentence 
 |cache|缓存|
 |children|子元素|
 |detached|已分离|
+|items|项目|
 |item views|项目视图|
 |pre-layout|pre-layout (不译)|
 |removal|移除|

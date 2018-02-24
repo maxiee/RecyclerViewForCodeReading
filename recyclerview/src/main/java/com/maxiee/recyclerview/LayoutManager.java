@@ -23,6 +23,7 @@ import android.view.accessibility.AccessibilityEvent;
 import java.util.ArrayList;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.ALLOW_SIZE_IN_UNSPECIFIED_SPEC;
+import static com.maxiee.recyclerview.RecyclerViewUtils.getChildViewHolderInt;
 
 /**
  * A <code>LayoutManager</code> is responsible for measuring and positioning item views
