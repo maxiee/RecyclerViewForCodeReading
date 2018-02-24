@@ -9,13 +9,18 @@ import java.util.List;
 
 /**
  * Helper class to manage children.
+ * 管理子元素的帮助类.
+ *
  * <p>
  * It wraps a RecyclerView and adds ability to hide some children. There are two sets of methods
  * provided by this class. <b>Regular</b> methods are the ones that replicate ViewGroup methods
  * like getChildAt, getChildCount etc. These methods ignore hidden children.
+ * 它封装了 RecyclerView, 增加了隐藏某些子元素的能力. 这个类提供了两套方法. 第一套是<b>常规</b>方法, 它复制了
+ * ViewGroup 的方法, 如 getChildAt, getChildCount 等. 这些方法忽略被隐藏的子元素.
  * <p>
  * When RecyclerView needs direct access to the view group children, it can call unfiltered
  * methods like get getUnfilteredChildCount or getUnfilteredChildAt.
+ * 当 RecyclerView 需要直接访问 view group 子元素, 它可以调用未过滤的方法, 例如 getUnfilteredChildCount 或者 getUnfilteredChildAt.
  */
 class ChildHelper {
 
