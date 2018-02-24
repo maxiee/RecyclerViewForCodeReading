@@ -257,4 +257,12 @@ public class ViewFlinger implements Runnable {
         removeCallbacks(this);
         mScroller.abortAnimation();
     }
+
+    /**
+     * add by Maxiee
+     * @return
+     */
+    public OverScroller getScroller() {
+        return mScroller;
+    }
 }

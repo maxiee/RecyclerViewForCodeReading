@@ -23,8 +23,22 @@ public class RecyclerViewConstants {
     static final String TRACE_ON_LAYOUT_TAG = "RV OnLayout";
 
     /**
+     * The RecyclerView is not currently scrolling.
+     * @see #getScrollState()
+     */
+    public static final int SCROLL_STATE_IDLE = 0;
+
+    /**
+     * The RecyclerView is currently being dragged by outside input such as user touch input.
+     * @see #getScrollState()
+     */
+    public static final int SCROLL_STATE_DRAGGING = 1;
+
+    /**
      * The RecyclerView is currently animating to a final position while not under
      * outside control.
+     * RecyclerView 现在是在动画的最终位置, 且不受外部的控制
+     *
      * @see #getScrollState()
      */
     public static final int SCROLL_STATE_SETTLING = 2;

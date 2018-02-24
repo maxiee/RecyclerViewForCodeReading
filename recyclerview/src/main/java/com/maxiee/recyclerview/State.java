@@ -32,6 +32,10 @@ public class State {
     static final int STEP_LAYOUT = 1 << 1;
     static final int STEP_ANIMATIONS = 1 << 2;
 
+    /**
+     * 验证当前状态是否是给定状态, 如果不是则抛出异常
+     * @param accepted
+     */
     void assertLayoutStep(int accepted) {
         if ((accepted & mLayoutStep) == 0) {
             throw new IllegalStateException("Layout state should be one of "
@@ -91,6 +95,7 @@ public class State {
 
     ////////////////////////////////////////////////////////////////////////////////////////////
     // Fields below are always reset outside of the pass (or passes) that use them
+    // 下面的字段总是在 pass (or passes) $HTT$ 之外被重置
     ////////////////////////////////////////////////////////////////////////////////////////////
 
     boolean mRunSimpleAnimations = false;
@@ -108,8 +113,8 @@ public class State {
     // that one instead
     int mFocusedSubChildId;
 
-    int mRemainingScrollHorizontal;
-    int mRemainingScrollVertical;
+    int mRemainingScrollHorizontal; // 横向剩余的滚动量
+    int mRemainingScrollVertical;   // 纵向剩余的滚动量
 
     ////////////////////////////////////////////////////////////////////////////////////////////
 

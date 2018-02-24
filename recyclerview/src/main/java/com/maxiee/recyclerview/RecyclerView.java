@@ -33,6 +33,7 @@ import android.widget.OverScroller;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.DEBUG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.NO_POSITION;
+import static com.maxiee.recyclerview.RecyclerViewConstants.SCROLL_STATE_IDLE;
 import static com.maxiee.recyclerview.RecyclerViewConstants.SCROLL_STATE_SETTLING;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TAG;
 import static com.maxiee.recyclerview.RecyclerViewConstants.TRACE_ON_LAYOUT_TAG;
@@ -107,6 +108,7 @@ public class RecyclerView extends ViewGroup {
     final ViewInfoStore mViewInfoStore = new ViewInfoStore();
 
     // Touch/scrolling handling
+    private int mScrollState = SCROLL_STATE_IDLE;
     private int mTouchSlop;
     private final int mMinFlingVelocity;
     private final int mMaxFlingVelocity;
@@ -166,6 +168,16 @@ public class RecyclerView extends ViewGroup {
         initAdapterManager();
         initChildrenHelper();
 
+    }
+
+    /**
+     * Return the current scrolling state of the RecyclerView.
+     *
+     * @return {@link #SCROLL_STATE_IDLE}, {@link #SCROLL_STATE_DRAGGING} or
+     * {@link #SCROLL_STATE_SETTLING}
+     */
+    public int getScrollState() {
+        return mScrollState;
     }
 
     private void initChildrenHelper() {
@@ -590,7 +602,10 @@ public class RecyclerView extends ViewGroup {
         }
         // simple animations are a subset of advanced animations (which will cause a
         // pre-layout step)
+        // 简单动画是高级动画的子集 (这会导致预先布局步骤)
+        //
         // If layout supports predictive animations, pre-process to decide if we want to run them
+        // 如果布局支持预测动画, 则预过程决定我们是否要运行它们
         if (predictiveItemAnimationsEnabled()) {
             mAdapterHelper.preProcess();
         } else {
@@ -636,13 +651,17 @@ public class RecyclerView extends ViewGroup {
         into[1] = maxPositionPreLayout;
     }
 
+    /**
+     * 预测项目动画是否可用
+     * @return
+     */
     private boolean predictiveItemAnimationsEnabled() {
         return (mItemAnimator != null && mLayout.supportsPredictiveItemAnimations());
     }
 
     final void fillRemainingScrollValues(State state) {
         if (getScrollState() == SCROLL_STATE_SETTLING) {
-            final OverScroller scroller = mViewFlinger.mScroller;
+            final OverScroller scroller = mViewFlinger.getScroller();
             state.mRemainingScrollHorizontal = scroller.getFinalX() - scroller.getCurrX();
             state.mRemainingScrollVertical = scroller.getFinalY() - scroller.getCurrY();
         } else {
