@@ -22,13 +22,17 @@ import android.content.res.TypedArray;
 import android.support.annotation.Nullable;
 import android.support.annotation.VisibleForTesting;
 import android.support.v4.os.TraceCompat;
+import android.support.v4.view.ViewCompat;
 import android.support.v4.view.ViewConfigurationCompat;
+import android.support.v4.view.accessibility.AccessibilityEventCompat;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityManager;
 import android.widget.OverScroller;
 
 import static com.maxiee.recyclerview.RecyclerViewConstants.DEBUG;
@@ -63,6 +67,11 @@ public class RecyclerView extends ViewGroup {
 
     boolean mLayoutRequestEaten;
 
+    // binary OR of change events that were eaten during a layout or scroll.
+    private int mEatenAccessibilityChangeFlags;
+
+    private final AccessibilityManager mAccessibilityManager;
+
     /**
      * Set to true when an adapter data set changed notification is received.
      * In that case, we cannot run any animations since we don't know what happened until layout.
@@ -90,6 +99,8 @@ public class RecyclerView extends ViewGroup {
     ItemAnimator mItemAnimator = new DefaultItemAnimator();
 
     final Recycler mRecycler = new Recycler();
+
+    private SavedState mPendingSavedState;
 
     /**
      * Handles adapter updates
@@ -167,6 +178,8 @@ public class RecyclerView extends ViewGroup {
 
         initAdapterManager();
         initChildrenHelper();
+
+        mAccessibilityManager = (AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
 
     }
 
@@ -563,6 +576,53 @@ public class RecyclerView extends ViewGroup {
         mState.mLayoutStep = State.STEP_LAYOUT;
     }
 
+    /**
+     * The second layout step where we do the actual layout of the views for the final state.
+     * This step might be run multiple times if necessary (e.g. measure).
+     *
+     * 第二个步骤, 我们执行实际的视图终态的布局操作.
+     * 这个步骤如果需要的话, 会被执行多次.
+     */
+    private void dispatchLayoutStep2() {
+        eatRequestLayout();
+        onEnterLayoutOrScroll();
+        mState.assertLayoutStep(State.STEP_LAYOUT | State.STEP_ANIMATIONS);
+        mAdapterHelper.consumeUpdatesInOnePass();
+        mState.mItemCount = mAdapter.getItemCount();
+        mState.mDeletedInvisibleItemCountSincePreviousLayout = 0;
+
+        // Step 2: Run layout
+        mState.mInPreLayout = false;
+        mLayout.onLayoutChildren(mRecycler, mState);
+
+        mState.mStructureChanged = false;
+        mPendingSavedState = null;
+
+        // onLayoutChildren may have caused client code to disable item animations; re-check
+        mState.mRunSimpleAnimations = mState.mRunSimpleAnimations && mItemAnimator != null;
+        mState.mLayoutStep = State.STEP_ANIMATIONS;
+        onExitLayoutOrScroll();
+
+        resumeRequestLayout(false);
+    }
+
+    /**
+     * Records the animation information for a view holder that was bounced from hidden list. It
+     * also clears the bounce back flag.
+     * 记录被绑定到已隐藏列表的 view holder 的动画信息, 它同时也清空了 (bounce back) 标志
+     */
+    void recordAnimationInfoIfBouncedHiddenView(ViewHolder viewHolder,
+                                                ItemHolderInfo animationInfo) {
+        // looks like this view bounced back from hidden list!
+        viewHolder.setFlags(0, ViewHolder.FLAG_BOUNCED_FROM_HIDDEN_LIST);
+        if (mState.mTrackOldChangeHolders && viewHolder.isUpdated()
+                && !viewHolder.isRemoved() && !viewHolder.shouldIgnore()) {
+            long key = getChangedHolderKey(viewHolder);
+            mViewInfoStore.addToOldChangeHolders(key, viewHolder);
+        }
+        mViewInfoStore.addToPreLayout(viewHolder, animationInfo);
+    }
+
     void eatRequestLayout() {
         mEatRequestLayout++;
         if (mEatRequestLayout == 1 && !mLayoutFrozen) {
@@ -572,6 +632,90 @@ public class RecyclerView extends ViewGroup {
 
     void onEnterLayoutOrScroll() {
         mLayoutOrScrollCounter++;
+    }
+
+    void onExitLayoutOrScroll() {
+        onExitLayoutOrScroll(true);
+    }
+
+    void onExitLayoutOrScroll(boolean enableChangeEvents) {
+        mLayoutOrScrollCounter--;
+        if (mLayoutOrScrollCounter < 1) {
+            if (DEBUG && mLayoutOrScrollCounter < 0) {
+                throw new IllegalStateException("layout or scroll counter cannot go below zero."
+                        + "Some calls are not matching" + exceptionLabel());
+            }
+            mLayoutOrScrollCounter = 0;
+            if (enableChangeEvents) {
+                dispatchContentChangedIfNecessary();
+                dispatchPendingImportantForAccessibilityChanges();
+            }
+        }
+    }
+
+    void resumeRequestLayout(boolean performLayoutChildren) {
+        if (mEatRequestLayout < 1) {
+            //noinspection PointlessBooleanExpression
+            if (DEBUG) {
+                throw new IllegalStateException("invalid eat request layout count"
+                        + exceptionLabel());
+            }
+            mEatRequestLayout = 1;
+        }
+        if (!performLayoutChildren) {
+            // Reset the layout request eaten counter.
+            // This is necessary since eatRequest calls can be nested in which case the other
+            // call will override the inner one.
+            // for instance:
+            // eat layout for process adapter updates
+            //   eat layout for dispatchLayout
+            //     a bunch of req layout calls arrive
+
+            mLayoutRequestEaten = false;
+        }
+        if (mEatRequestLayout == 1) {
+            // when layout is frozen we should delay dispatchLayout()
+            if (performLayoutChildren && mLayoutRequestEaten && !mLayoutFrozen
+                    && mLayout != null && mAdapter != null) {
+                dispatchLayout();
+            }
+            if (!mLayoutFrozen) {
+                mLayoutRequestEaten = false;
+            }
+        }
+        mEatRequestLayout--;
+    }
+
+    boolean isAccessibilityEnabled() {
+        return mAccessibilityManager != null && mAccessibilityManager.isEnabled();
+    }
+
+    private void dispatchContentChangedIfNecessary() {
+        final int flags = mEatenAccessibilityChangeFlags;
+        mEatenAccessibilityChangeFlags = 0;
+        if (flags != 0 && isAccessibilityEnabled()) {
+            final AccessibilityEvent event = AccessibilityEvent.obtain();
+            event.setEventType(AccessibilityEventCompat.TYPE_WINDOW_CONTENT_CHANGED);
+            AccessibilityEventCompat.setContentChangeTypes(event, flags);
+            sendAccessibilityEventUnchecked(event);
+        }
+    }
+
+    void dispatchPendingImportantForAccessibilityChanges() {
+        for (int i = mPendingAccessibilityImportanceChange.size() - 1; i >= 0; i--) {
+            ViewHolder viewHolder = mPendingAccessibilityImportanceChange.get(i);
+            if (viewHolder.itemView.getParent() != this || viewHolder.shouldIgnore()) {
+                continue;
+            }
+            int state = viewHolder.mPendingAccessibilityState;
+            if (state != ViewHolder.PENDING_ACCESSIBILITY_STATE_NOT_SET) {
+                //noinspection WrongConstant
+                ViewCompat.setImportantForAccessibility(viewHolder.itemView, state);
+                viewHolder.mPendingAccessibilityState =
+                        ViewHolder.PENDING_ACCESSIBILITY_STATE_NOT_SET;
+            }
+        }
+        mPendingAccessibilityImportanceChange.clear();
     }
 
     /**
